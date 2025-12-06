@@ -2,11 +2,11 @@
 Module for PyVLX object.
 
 PyVLX is an asynchronous library for connecting to
-a VELUX KLF 200 device for controlling window openers
+a VELUX KLF 200 or KLF 150 device for controlling window openers
 and roller shutters.
 """
 import asyncio
-from typing import Optional
+from typing import Literal, Optional, Union
 
 from .api import get_limitation
 from .api.frames import FrameBase
@@ -19,6 +19,9 @@ from .log import PYVLXLOG
 from .node_updater import NodeUpdater
 from .nodes import Nodes
 from .scenes import Scenes
+from .serial_connection import SerialConnection
+
+GatewayType = Literal["klf200", "klf150"]
 
 
 class PyVLX:
@@ -29,14 +32,30 @@ class PyVLX:
         path: Optional[str] = None,
         host: Optional[str] = None,
         password: Optional[str] = None,
+        port: Optional[str] = None,
+        gateway_type: GatewayType = "klf200",
         loop: Optional[asyncio.AbstractEventLoop] = None,
         heartbeat_interval: int = 30,
         heartbeat_load_all_states: bool = True,
     ):
         """Initialize PyVLX class."""
         self.loop = loop or asyncio.get_event_loop()
+        self.gateway_type = gateway_type
         self.config = Config(self, path, host, password)
-        self.connection = Connection(loop=self.loop, config=self.config)
+
+        # Set frame encoding/decoding mode based on gateway type
+        from .api.frames import FrameBase
+        FrameBase.is_klf150 = (gateway_type == "klf150")
+
+        # Create appropriate connection based on gateway type
+        self.connection: Union[Connection, SerialConnection]
+        if gateway_type == "klf150":
+            if port is None:
+                raise PyVLXException("Serial port must be specified for KLF 150")
+            self.connection = SerialConnection(loop=self.loop, port=port)
+        else:
+            self.connection = Connection(loop=self.loop, config=self.config)
+
         self.heartbeat = Heartbeat(
             pyvlx=self,
             interval=heartbeat_interval,
@@ -53,11 +72,15 @@ class PyVLX:
         self.api_call_semaphore = asyncio.Semaphore(1)  # Limit parallel commands
 
     async def connect(self) -> None:
-        """Connect to KLF 200."""
-        PYVLXLOG.debug("Connecting to KLF 200")
+        """Connect to gateway (KLF 200 or KLF 150)."""
+        PYVLXLOG.debug("Connecting to %s", "KLF 150" if self.gateway_type == "klf150" else "KLF 200")
         await self.connection.connect()
-        assert self.config.password is not None
-        await self.klf200.password_enter(password=self.config.password)
+
+        # KLF 150 doesn't require password authentication
+        if self.gateway_type == "klf200":
+            assert self.config.password is not None
+            await self.klf200.password_enter(password=self.config.password)
+
         await self.klf200.get_version()
         await self.klf200.get_protocol_version()
         PYVLXLOG.debug(
@@ -65,11 +88,19 @@ class PyVLX:
             str(self.klf200.version),
             str(self.klf200.protocol_version),
         )
-        await self.klf200.house_status_monitor_disable(pyvlx=self)
+
+        # KLF 150 doesn't support house status monitor commands
+        if self.gateway_type == "klf200":
+            await self.klf200.house_status_monitor_disable(pyvlx=self)
+
         await self.klf200.get_state()
-        await self.klf200.set_utc()
-        await self.klf200.get_network_setup()
-        await self.klf200.house_status_monitor_enable(pyvlx=self)
+
+        # KLF 150 doesn't support some commands - make them optional
+        if self.gateway_type == "klf200":
+            await self.klf200.set_utc()
+            await self.klf200.get_network_setup()
+            await self.klf200.house_status_monitor_enable(pyvlx=self)
+
         self.heartbeat.start()
 
     async def reboot_gateway(self) -> None:
@@ -95,15 +126,18 @@ class PyVLX:
         self.connection.write(frame)
 
     async def disconnect(self) -> None:
-        """Disconnect from KLF 200."""
+        """Disconnect from gateway (KLF 200 or KLF 150)."""
         await self.heartbeat.stop()
         if self.connection.connected:
             try:
                 # If the connection will be closed while house status monitor is enabled, a reconnection will fail on SSL handshake.
-                if self.klf200.house_status_monitor_enabled:
+                # KLF 150 doesn't support house status monitor
+                if self.gateway_type == "klf200" and self.klf200.house_status_monitor_enabled:
                     await self.klf200.house_status_monitor_disable(pyvlx=self, timeout=5)
                 # Reboot KLF200 when disconnecting to avoid unresponsive KLF200.
-                await self.klf200.reboot()
+                # KLF 150 doesn't need to be rebooted on disconnect
+                if self.gateway_type == "klf200":
+                    await self.klf200.reboot()
             except (OSError, PyVLXException):
                 PYVLXLOG.exception("Error during disconnect preparations")
             self.connection.disconnect()

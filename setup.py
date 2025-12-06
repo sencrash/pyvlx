@@ -4,7 +4,7 @@ from os import path
 
 from setuptools import find_packages, setup
 
-REQUIRES = ["PyYAML", "zeroconf"]
+REQUIRES = ["PyYAML", "zeroconf", "pyserial-asyncio"]
 
 PKG_ROOT = os.path.dirname(__file__)
 

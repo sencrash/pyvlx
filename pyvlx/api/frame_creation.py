@@ -40,9 +40,9 @@ from .frames import (
     FrameStatusRequestRequest, extract_from_frame)
 
 
-def frame_from_raw(raw: bytes) -> Optional[FrameBase]:
+def frame_from_raw(raw: bytes, is_klf150: bool = False) -> Optional[FrameBase]:
     """Create and return frame from raw bytes."""
-    command, payload = extract_from_frame(raw)
+    command, payload = extract_from_frame(raw, is_klf150=is_klf150)
     frame = create_frame(command)
     if frame is None:
         PYVLXLOG.warning(
