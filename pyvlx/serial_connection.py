@@ -121,7 +121,7 @@ class SerialConnection:
                 task.add_done_callback(self.tasks.remove)
 
     async def connect(self) -> None:
-        """Connect to KLF 150 gateway via serial port."""
+        """Connect to KLF 150 gateway via serial port or network."""
         connection_made_event = asyncio.Event()
         serial_client = SerialTransport(
             self.frame_received_cb,
@@ -129,7 +129,11 @@ class SerialConnection:
             connection_made_event=connection_made_event,
         )
 
-        PYVLXLOG.debug("Opening serial port %s at %d baud", self.port, self.BAUD_RATE)
+        PYVLXLOG.debug("Opening serial connection to %s", self.port)
+        if self.port.startswith(('rfc2217://', 'socket://')):
+            PYVLXLOG.debug("Using network serial connection")
+        else:
+            PYVLXLOG.debug("Using local serial at %d baud", self.BAUD_RATE)
 
         self.transport, _ = await serial_asyncio.create_serial_connection(
             self.loop,
